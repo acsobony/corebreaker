@@ -23,6 +23,10 @@
   #help small{display:block;margin-top:10px;font-size:16px;font-weight:400;color:#7f93b8}
   #alt{position:fixed;right:12px;bottom:10px;color:#7f93b8;font:14px "Trebuchet MS","Segoe UI",sans-serif}
   #err{left:0;right:0;top:45%;text-align:center;color:#ff5fa2}
+  .tc,.touch .kb{display:none}
+  .touch .tc{display:inline}
+  .touch #help{bottom:120px;font-size:16px}
+  @media (max-width:700px){#title h1{font-size:40px}#hud{font-size:16px}#help small{font-size:13px}}
   @keyframes blink{50%{opacity:0}}
 </style>
 <script type="importmap">
@@ -33,11 +37,12 @@
 <div id="hud">
   <div id="score"></div><div id="best"></div><div id="sector"></div><div id="lives"></div>
   <div id="banner"></div>
-  <div id="title"><h1>COREBREAKER <span>3D</span></h1><div class="over"></div><div class="go">PRESS SPACE TO LAUNCH</div></div>
+  <div id="title"><h1>COREBREAKER <span>3D</span></h1><div class="over"></div><div class="go"><span class="kb">PRESS SPACE TO LAUNCH</span><span class="tc">TAP TO LAUNCH</span></div></div>
   <div id="help">
-    &larr; &rarr; or A D &nbsp; rotate &emsp; &uarr; or W &nbsp; thrust &emsp; SPACE &nbsp; fire<br>
-    C &nbsp; switch camera &emsp; P &nbsp; pause
-    <small>Punch a lane through the spinning shells and hit the core.<br>Strip the whole outer shell and the fortress regrows.<br>The core's gravity pulls you in: coast sideways to orbit and strafe.</small>
+    <span class="kb">&larr; &rarr; or A D &nbsp; rotate &emsp; &uarr; or W &nbsp; thrust &emsp; SPACE &nbsp; fire<br>
+    C &nbsp; switch camera &emsp; P &nbsp; pause</span>
+    <span class="tc">&#9664; &#9654; rotate &emsp; THRUST &emsp; FIRE &emsp; CAM switches view</span>
+    <small>Punch a lane through the spinning shells and hit the core.<br>Strip the whole outer shell and the fortress regrows.<br>The core's gravity pulls you in: coast sideways to orbit and strafe.<br>Planets bend your shots. A black hole spits you out on the far side.</small>
   </div>
   <div id="err"></div>
 </div>
@@ -64,7 +69,7 @@ document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05060d);
 scene.fog = new THREE.Fog(0x05060d, 900, 2600);
-const camera = new THREE.PerspectiveCamera(50, 1, 1, 6000);
+const camera = new THREE.PerspectiveCamera(50, 1, 1, 12000);
 scene.add(new THREE.AmbientLight(0x8fa4ff, 0.45));
 const sun = new THREE.DirectionalLight(0xffffff, 1.0); sun.position.set(250, 600, 350); scene.add(sun);
 const coreLight = new THREE.PointLight(0xff5544, 0.5, 0, 0); coreLight.position.set(0, LVL + 30, 0); scene.add(coreLight);
@@ -80,24 +85,81 @@ function resize() {
 }
 addEventListener('resize', resize); resize();
 
-// ---------- arena floor and stars ----------
+// ---------- space-time fabric and stars ----------
+// The floor grid is the fabric: every frame its vertices sink into a well under each mass
+// (core, planets, black hole) and rise over a white hole. Sources come from fabricSources().
+const FLOOR = -24;
+function fabricLines(lines, material) {
+  const base = [];
+  for (const [x0, z0, x1, z1] of lines) {
+    const n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 20);
+    for (let i = 0; i < n; i++) {
+      base.push(x0 + (x1 - x0) * i / n, z0 + (z1 - z0) * i / n, x0 + (x1 - x0) * (i + 1) / n, z0 + (z1 - z0) * (i + 1) / n);
+    }
+  }
+  const pos = new Float32Array(base.length / 2 * 3), geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mesh = new THREE.LineSegments(geom, material); mesh.frustumCulled = false; scene.add(mesh);
+  return { base, pos, geom };
+}
+function warpFabric(f, src) {
+  for (let i = 0, j = 0; i < f.base.length; i += 2, j += 3) {
+    const x = f.base[i], z = f.base[i + 1]; let y = FLOOR;
+    for (const s of src) {
+      const dx = s.x - CX - x, dz = s.y - CY - z;
+      y -= 70 * s.depth / (1 + (dx * dx + dz * dz) / (s.size * s.size));
+    }
+    f.pos[j] = x; f.pos[j + 1] = y; f.pos[j + 2] = z;
+  }
+  f.geom.attributes.position.needsUpdate = true;
+}
+const fabric = [];
 {
-  const pts = [], hw = W / 2, hh = H / 2, y = -24;
-  for (let x = -hw; x <= hw + 1; x += 60) pts.push(x, y, -hh, x, y, hh);
-  for (let z = -hh; z <= hh + 1; z += 60) pts.push(-hw, y, z, hw, y, z);
-  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-  scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x1c2f66, transparent: true, opacity: 0.7 })));
-  const b = new THREE.BufferGeometry(); b.setAttribute('position', new THREE.Float32BufferAttribute(
-    [-hw, y, -hh, hw, y, -hh, hw, y, -hh, hw, y, hh, hw, y, hh, -hw, y, hh, -hw, y, hh, -hw, y, -hh], 3));
-  scene.add(new THREE.LineSegments(b, new THREE.LineBasicMaterial({ color: 0x4f7dff })));
+  const hw = W / 2, hh = H / 2, inner = [];
+  for (let x = -hw + 30; x < hw; x += 30) inner.push([x, -hh, x, hh]);
+  for (let z = -hh + 30; z < hh; z += 30) inner.push([-hw, z, hw, z]);
+  fabric.push(fabricLines(inner, new THREE.LineBasicMaterial({ color: 0x24408c, transparent: true, opacity: 0.75 })));
+  fabric.push(fabricLines([[-hw, -hh, hw, -hh], [hw, -hh, hw, hh], [hw, hh, -hw, hh], [-hw, hh, -hw, -hh]],
+    new THREE.LineBasicMaterial({ color: 0x4f7dff })));
   const sp = [];
   for (let i = 0; i < 900; i++) {
-    const v = new THREE.Vector3().randomDirection().multiplyScalar(rnd(1800, 2600));
+    const v = new THREE.Vector3().randomDirection().multiplyScalar(rnd(4000, 5200));
     sp.push(v.x, v.y, v.z);
   }
   const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
   scene.add(new THREE.Points(sg, new THREE.PointsMaterial({ color: 0x9fb4ff, size: 2, sizeAttenuation: false, fog: false })));
 }
+
+// ---------- planets and holes ----------
+let planetsRef = null;
+const planetViews = [];
+function syncPlanets(fdt) {
+  if (planetsRef !== planets) {
+    for (const g of planetViews) { scene.remove(g); g.traverse(o => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } }); }
+    planetViews.length = 0; planetsRef = planets;
+    for (const p of planets) {
+      const g = new THREE.Group(), c = new THREE.Color(p.color);
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(p.r, 28, 18),
+        new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.12, roughness: 0.85, flatShading: true }));
+      g.add(ball);
+      if (p.ring) {
+        const ring = new THREE.Mesh(new THREE.RingGeometry(p.r * 1.35, p.r * 1.95, 48).rotateX(-Math.PI / 2),
+          new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false }));
+        ring.rotation.z = 0.35; g.add(ring);
+      }
+      g.position.set(p.x - CX, LVL, p.y - CY); scene.add(g); planetViews.push(g);
+    }
+  }
+  for (const g of planetViews) g.children[0].rotation.y += fdt * 0.25;
+}
+const holeView = new THREE.Group(); scene.add(holeView);
+const holeDisc = new THREE.Mesh(new THREE.RingGeometry(HOLE_R + 2, HOLE_R + 24, 56, 1, 0, Math.PI * 1.7).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: 0xff9a3c, transparent: true, opacity: 0.85, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
+const holeRim = new THREE.Mesh(new THREE.TorusGeometry(HOLE_R + 2, 1.6, 8, 48).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffd9a0 }));
+holeView.add(new THREE.Mesh(new THREE.SphereGeometry(HOLE_R, 24, 16), new THREE.MeshBasicMaterial({ color: 0x000000, fog: false })), holeDisc, holeRim);
+const whiteView = new THREE.Group(); scene.add(whiteView);
+const whiteRing = new THREE.Mesh(new THREE.TorusGeometry(24, 1.5, 8, 48).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x7fd4ff }));
+whiteView.add(new THREE.Mesh(new THREE.SphereGeometry(14, 24, 16), new THREE.MeshBasicMaterial({ color: 0xffffff })), whiteRing);
 
 // ---------- fortress ----------
 const colorCache = new Map();
@@ -196,8 +258,10 @@ const pExtra = new WeakMap();   // gives each flat sim particle some height
 let chase = false, camInit = false, lastShip = null;
 const camPos = new THREE.Vector3(), camLook = new THREE.Vector3(), wantPos = new THREE.Vector3(), wantLook = new THREE.Vector3();
 addEventListener('keydown', e => { if (e.code === 'KeyC' && !e.repeat) chase = !chase; });
+addTouchButton('CAM', 't-small t-cam', null, () => { chase = !chase; });
 function updateCamera(fdt) {
   const fit = Math.max(1, 1.55 / camera.aspect);
+  scene.fog.near = 900 * fit; scene.fog.far = 2600 * fit;   // a narrow (portrait) window pulls the camera back
   if (state !== 'play' || !ship) {
     const t = time * 0.15;
     wantPos.set(Math.cos(t) * 430, 250, Math.sin(t) * 430); wantLook.set(0, 10, 0);
@@ -243,6 +307,19 @@ window.draw = function () {
   const now = performance.now(), fdt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
   if (state !== 'play') shells.forEach(s => { s.rot += s.speed * fdt; });   // idle spin behind the title
   syncShells();
+  syncPlanets(fdt);
+  const src = fabricSources();
+  for (const f of fabric) warpFabric(f, src);
+  holeView.visible = !!hole;
+  if (hole) {
+    holeView.position.set(hole.x - CX, LVL, hole.y - CY); holeView.scale.setScalar(Math.max(0.001, hole.k));
+    holeDisc.rotation.y = -hole.spin * 3;
+  }
+  whiteView.visible = !!whiteHole;
+  if (whiteHole) {
+    whiteView.position.set(whiteHole.x - CX, LVL, whiteHole.y - CY); whiteView.scale.setScalar(Math.max(0.001, whiteHole.k));
+    whiteRing.scale.setScalar(1 + 0.15 * Math.sin(now * 0.03));
+  }
 
   coreView.visible = core.alive;
   coreView.rotation.y = -core.ang;
@@ -252,7 +329,10 @@ window.draw = function () {
   coreLight.intensity = core.alive ? 0.5 + core.flash * 1.5 : 0;
 
   const playing = state === 'play' && ship;
-  shipView.visible = !!playing && ship.alive && (ship.inv <= 0 || Math.floor(time * 12) % 2 === 1);
+  // during a warp the ship is drawn stretched thin (in/out) or not at all (void)
+  shipView.visible = !!playing && ship.alive &&
+    (warp ? warp.phase !== 'void' : (ship.inv <= 0 || Math.floor(time * 12) % 2 === 1));
+  shipView.scale.set(warp ? warp.stretch : 1, 1, warp ? warp.squash : 1);
   if (playing) {
     shipView.position.set(ship.x - CX, LVL, ship.y - CY); shipView.rotation.y = -ship.a;
     const wantBank = ship.alive ? ((keys.right ? 1 : 0) - (keys.left ? 1 : 0)) * 0.5 : 0;

@@ -26,8 +26,8 @@ addEventListener('resize', resize); resize();
 
 // ---------- draw ----------
 function glow(c, b) { ctx.shadowColor = c; ctx.shadowBlur = b; }
-function drawShip(x, y, a, scale = 1, flame = 0) {
-  ctx.save(); ctx.translate(x, y); ctx.rotate(a); ctx.scale(scale, scale);
+function drawShip(x, y, a, scale = 1, flame = 0, stretch = 1, squash = 1) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(a); ctx.scale(scale * stretch, scale * squash);
   if (flame > 0) {
     ctx.fillStyle = '#ffb347'; glow('#ff7a2f', 14);
     ctx.beginPath(); ctx.moveTo(-9, -4); ctx.lineTo(-12 - flame * rnd(8, 16), 0); ctx.lineTo(-9, 4); ctx.fill();
@@ -53,7 +53,52 @@ function draw() {
   }
   ctx.globalAlpha = 1;
 
+  // space-time fabric: a grid whose lines are dragged toward anything massive
+  const src = fabricSources();
+  const warped = (x, y, first) => {
+    let ox = 0, oy = 0;
+    for (const s of src) {
+      const dx = s.x - x, dy = s.y - y, w = 0.3 * s.depth / (1 + (dx * dx + dy * dy) / (s.size * s.size));
+      ox += dx * w; oy += dy * w;
+    }
+    if (first) ctx.moveTo(x + ox, y + oy); else ctx.lineTo(x + ox, y + oy);
+  };
+  ctx.strokeStyle = 'rgba(79,125,255,0.17)'; ctx.lineWidth = 1; ctx.beginPath();
+  for (let x = 0; x <= W; x += 48) for (let y = 0; y <= H; y += 16) warped(x, y, y === 0);
+  for (let y = 0; y <= H; y += 48) for (let x = 0; x <= W; x += 16) warped(x, y, x === 0);
+  ctx.stroke();
+
   if (shells) {
+    // planets
+    for (const p of planets) {
+      const g = ctx.createRadialGradient(p.x - p.r * 0.35, p.y - p.r * 0.35, p.r * 0.1, p.x, p.y, p.r);
+      g.addColorStop(0, '#ffffff'); g.addColorStop(0.3, p.color); g.addColorStop(1, '#0b1020');
+      glow(p.color, 16); ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill();
+      if (p.ring) {
+        ctx.strokeStyle = p.color; ctx.globalAlpha = 0.7; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.ellipse(p.x, p.y, p.r * 1.8, p.r * 0.5, -0.4, 0, TAU); ctx.stroke(); ctx.globalAlpha = 1;
+      }
+    }
+    // black hole: spinning accretion arcs around a dark disc
+    if (hole) {
+      const R = HOLE_R * hole.k;
+      ctx.lineWidth = 3; ctx.strokeStyle = '#ffb347'; glow('#ff8a2a', 24);
+      for (let i = 0; i < 3; i++) {
+        const a0 = hole.spin * (4 - i) + i * 2.1;
+        ctx.globalAlpha = (0.9 - i * 0.25) * hole.k;
+        ctx.beginPath(); ctx.arc(hole.x, hole.y, R + 5 + i * 6, a0, a0 + 3.8); ctx.stroke();
+      }
+      ctx.globalAlpha = 1; ctx.shadowBlur = 0; ctx.fillStyle = '#000';
+      ctx.beginPath(); ctx.arc(hole.x, hole.y, R, 0, TAU); ctx.fill();
+    }
+    if (whiteHole) {
+      const R = 15 * whiteHole.k;
+      glow('#ffffff', 34); ctx.fillStyle = '#f4fbff';
+      ctx.beginPath(); ctx.arc(whiteHole.x, whiteHole.y, R, 0, TAU); ctx.fill();
+      ctx.strokeStyle = '#7fd4ff'; ctx.lineWidth = 2; ctx.globalAlpha = whiteHole.k;
+      ctx.beginPath(); ctx.arc(whiteHole.x, whiteHole.y, R + 8 + 3 * Math.sin(time * 30), 0, TAU); ctx.stroke(); ctx.globalAlpha = 1;
+    }
     // shells
     ctx.lineCap = 'round';
     shells.forEach((s, i) => {
@@ -98,7 +143,11 @@ function draw() {
     glow('#7fd4ff', 10); ctx.strokeStyle = '#eaf6ff'; ctx.lineWidth = 3;
     for (const b of shots) { ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx * 0.018, b.y - b.vy * 0.018); ctx.stroke(); }
     // ship
-    if (ship.alive && (ship.inv <= 0 || Math.floor(time * 12) % 2)) drawShip(ship.x, ship.y, ship.a, 1, ship.flame);
+    if (ship.alive && warp) {      // being pulled thin into the hole, or thrown back out
+      if (warp.phase !== 'void') {
+        ctx.globalAlpha = warp.alpha; drawShip(ship.x, ship.y, ship.a, 1, 0, warp.stretch, warp.squash); ctx.globalAlpha = 1;
+      }
+    } else if (ship.alive && (ship.inv <= 0 || Math.floor(time * 12) % 2)) drawShip(ship.x, ship.y, ship.a, 1, ship.flame);
   }
   // particles
   for (const p of parts) {
@@ -121,14 +170,19 @@ function draw() {
     ctx.shadowBlur = 0;
     if (state === 'over') text('GAME OVER  —  ' + score + ' points', CX, 250, 26, '#ff5fa2');
     const y = 470;
-    text('← →  or  A D    rotate', CX, y, 20);
-    text('↑  or  W    thrust', CX, y + 30, 20);
-    text('SPACE    fire', CX, y + 60, 20);
-    text('P    pause', CX, y + 90, 20);
+    if (touchOn) {
+      text('◀ ▶  rotate      THRUST      FIRE', CX, y + 45, 22);
+    } else {
+      text('← →  or  A D    rotate', CX, y, 20);
+      text('↑  or  W    thrust', CX, y + 30, 20);
+      text('SPACE    fire', CX, y + 60, 20);
+      text('P    pause', CX, y + 90, 20);
+    }
     text('Punch a lane through the spinning shells and hit the core.', CX, y + 140, 17, '#7f93b8');
     text('Strip the whole outer shell and the fortress regrows.', CX, y + 164, 17, '#7f93b8');
     text("The core's gravity pulls you in: coast sideways to orbit and strafe.", CX, y + 188, 17, '#7f93b8');
-    if (Math.floor(time * 2) % 2) text('PRESS SPACE TO LAUNCH', CX, 330, 24, '#ffe9a8');
+    text('Planets bend your shots. A black hole spits you out on the far side.', CX, y + 212, 17, '#7f93b8');
+    if (Math.floor(time * 2) % 2) text(touchOn ? 'TAP TO LAUNCH' : 'PRESS SPACE TO LAUNCH', CX, 330, 24, '#ffe9a8');
   }
 }
 
