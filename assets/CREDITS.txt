@@ -1,0 +1,6 @@
+earth.jpg
+  NASA "Blue Marble: Land Surface, Ocean Color and Sea Ice" (Land_ocean_ice_2048.jpg),
+  NASA Goddard Space Flight Center / Reto Stöckli. Public domain.
+  Fetched from Wikimedia Commons and resized to 1024x512.
+
+The other planets' surface maps are generated in game.js.

@@ -40,6 +40,36 @@ function drawShip(x, y, a, scale = 1, flame = 0, stretch = 1, squash = 1) {
   ctx.fillStyle = '#7fd4ff'; ctx.beginPath(); ctx.arc(3, 0, 2.5, 0, TAU); ctx.fill();
   ctx.restore();
 }
+// A turning globe: the surface map is drawn one pixel column at a time, each column taken from
+// the longitude that an orthographic view of a sphere would show there, then shaded.
+function drawPlanet(p) {
+  const tex = planetTex[p.type], tw = tex.width, th = tex.height, r = p.r, lean = p.tilt * 0.6;
+  const turn = time * p.rate / TAU;
+  const ringHalf = (a0, a1) => {
+    ctx.strokeStyle = 'rgba(218,196,146,0.8)'; ctx.lineWidth = r * 0.26;
+    ctx.beginPath(); ctx.ellipse(0, 0, r * 1.52, r * 0.42, 0, a0, a1); ctx.stroke();
+    ctx.strokeStyle = 'rgba(186,162,118,0.6)'; ctx.lineWidth = r * 0.15;
+    ctx.beginPath(); ctx.ellipse(0, 0, r * 1.92, r * 0.53, 0, a0, a1); ctx.stroke();
+  };
+  ctx.save(); ctx.translate(p.x, p.y); ctx.lineCap = 'butt';
+  glow(p.color, 18); ctx.fillStyle = 'rgba(10,14,30,1)';
+  ctx.beginPath(); ctx.arc(0, 0, r - 1, 0, TAU); ctx.fill();          // halo behind the globe
+  ctx.shadowBlur = 0;
+  ctx.rotate(lean);
+  if (p.ring) ringHalf(Math.PI, TAU);                                 // far half of the rings
+  for (let x = -Math.ceil(r); x < r; x++) {
+    const xc = x + 0.5; if (Math.abs(xc) >= r) continue;
+    const h = Math.sqrt(r * r - xc * xc), span = Math.asin(h / r) / Math.PI;
+    const u = (((Math.asin(xc / r) / TAU - turn) % 1) + 1) % 1;
+    ctx.drawImage(tex, Math.min(tw - 1, Math.floor(u * tw)), (0.5 - span) * th, 1, 2 * span * th, x, -h, 1.08, 2 * h);
+  }
+  ctx.rotate(-lean);
+  const g = ctx.createRadialGradient(-r * 0.45, -r * 0.45, r * 0.1, -r * 0.2, -r * 0.2, r * 1.45);
+  g.addColorStop(0, 'rgba(255,255,255,0.22)'); g.addColorStop(0.35, 'rgba(255,255,255,0)'); g.addColorStop(1, 'rgba(0,0,12,0.85)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r + 0.5, 0, TAU); ctx.fill();   // day side to night side
+  if (p.ring) { ctx.rotate(lean); ringHalf(0, Math.PI); }             // near half, over the globe
+  ctx.restore(); ctx.lineCap = 'round';
+}
 function text(s, x, y, size, color = '#cfeaff', align = 'center') {
   ctx.font = '600 ' + size + 'px "Trebuchet MS", "Segoe UI", sans-serif';
   ctx.textAlign = align; ctx.fillStyle = color; ctx.fillText(s, x, y);
@@ -69,17 +99,7 @@ function draw() {
   ctx.stroke();
 
   if (shells) {
-    // planets
-    for (const p of planets) {
-      const g = ctx.createRadialGradient(p.x - p.r * 0.35, p.y - p.r * 0.35, p.r * 0.1, p.x, p.y, p.r);
-      g.addColorStop(0, '#ffffff'); g.addColorStop(0.3, p.color); g.addColorStop(1, '#0b1020');
-      glow(p.color, 16); ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill();
-      if (p.ring) {
-        ctx.strokeStyle = p.color; ctx.globalAlpha = 0.7; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.ellipse(p.x, p.y, p.r * 1.8, p.r * 0.5, -0.4, 0, TAU); ctx.stroke(); ctx.globalAlpha = 1;
-      }
-    }
+    for (const p of planets) drawPlanet(p);
     // black hole: spinning accretion arcs around a dark disc
     if (hole) {
       const R = HOLE_R * hole.k;

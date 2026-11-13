@@ -121,7 +121,6 @@ let shells, core, ship, shots, bolts, drones, parts, droneTimer, clearTimer, res
 // (whiteHole) returns it on the far side of the arena while warp runs and timeScale slows the game
 let planets = [], hole = null, whiteHole = null, warp = null, holeTimer = 12, timeScale = 1;
 const HOLE_R = 14, HOLE_MU = 2.2e6, LIGHT_BEND = 3;
-const PLANET_COLORS = ['#6fa8ff', '#c9a26b', '#9be37a', '#d98cff', '#ff9d6b'];
 const stars = Array.from({ length: 90 }, () => ({ x: rnd(0, W), y: rnd(0, H), s: rnd(0.4, 1.6), p: rnd(0, TAU) }));
 
 const ORBIT_SPEED = 170, GRAV_MAX = 240, SPAWN_R = 290;
@@ -159,18 +158,123 @@ function burst(x, y, color, n, speed, life = 0.8) {
   }
 }
 
+// ---------- planets ----------
+// rate: spin in rad/s (Venus turns backwards), tilt: lean of the axis in radians
+const PLANET_TYPES = {
+  earth:   { r: 28, color: '#6fa8ff', rate: 0.5,   tilt: 0.41 },
+  saturn:  { r: 31, color: '#e3c98a', rate: 0.8,   tilt: 0.47, ring: true },
+  jupiter: { r: 38, color: '#d9a66b', rate: 0.9,   tilt: 0.05 },
+  mars:    { r: 22, color: '#d9703f', rate: 0.45,  tilt: 0.44 },
+  neptune: { r: 30, color: '#5f8dff', rate: 0.6,   tilt: 0.49 },
+  venus:   { r: 26, color: '#e8d9a0', rate: -0.15, tilt: 0.05 },
+};
+const OTHER_PLANETS = ['saturn', 'jupiter', 'mars', 'neptune', 'venus'];
+
+// Each planet type has an equirectangular surface map on a canvas, shared by both renderers.
+// Earth's is a NASA Blue Marble image (assets/earth.jpg); the rest are painted here from noise.
+const planetTex = {};
+let planetTexVersion = 0;      // bumped when a map changes so the 3D renderer re-uploads it
+function hash3(x, y, z) {
+  let h = (x * 374761393 + y * 668265263 + z * 1274126177) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function noise3(x, y, z) {
+  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+  let fx = x - xi, fy = y - yi, fz = z - zi;
+  fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy); fz = fz * fz * (3 - 2 * fz);
+  const l = (a, b, t) => a + (b - a) * t;
+  return l(l(l(hash3(xi, yi, zi), hash3(xi + 1, yi, zi), fx), l(hash3(xi, yi + 1, zi), hash3(xi + 1, yi + 1, zi), fx), fy),
+           l(l(hash3(xi, yi, zi + 1), hash3(xi + 1, yi, zi + 1), fx), l(hash3(xi, yi + 1, zi + 1), hash3(xi + 1, yi + 1, zi + 1), fx), fy), fz);
+}
+function fbm(x, y, z, octaves) {
+  let sum = 0, amp = 0.5, norm = 0;
+  for (let i = 0; i < octaves; i++) { sum += amp * noise3(x, y, z); norm += amp; x *= 2.03; y *= 2.03; z *= 2.03; amp *= 0.5; }
+  return sum / norm;
+}
+const mix3 = (a, b, t) => { t = Math.max(0, Math.min(1, t)); return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; };
+const bands = (stops, t) => { const f = Math.max(0, Math.min(0.9999, t)) * (stops.length - 1), i = Math.floor(f); return mix3(stops[i], stops[i + 1], f - i); };
+const wrapDist = d => { d = Math.abs(d) % 1; return d > 0.5 ? 1 - d : d; };
+// u: longitude 0..1, v: 0 at the north pole to 1 at the south; n(fx, fy, oct) is seamless around the globe
+const PLANET_PAINT = {
+  earth(u, v, n) {      // stand-in until the photo loads
+    const ice = Math.abs(v - 0.5) * 2 > 0.84 + (n(3, 3, 3) - 0.5) * 0.2;
+    if (ice) return [236, 242, 248];
+    const land = n(1.6, 1.6, 5);
+    return land > 0.55 ? mix3([60, 120, 50], [150, 130, 80], (land - 0.55) * 6) : mix3([14, 40, 110], [30, 80, 160], land * 1.6);
+  },
+  mars(u, v, n) {
+    if (Math.abs(v - 0.5) * 2 > 0.87 + (n(4, 4, 3) - 0.5) * 0.18) return [240, 232, 226];
+    let c = mix3([120, 52, 30], [205, 104, 58], n(2.4, 2.4, 5) * 1.5 - 0.2);
+    return mix3(c, [70, 34, 26], (n(1.1, 1.3, 4) - 0.56) * 5);          // dark basalt plains
+  },
+  jupiter(u, v, n) {
+    const t = v + (n(2.5, 5, 4) - 0.5) * 0.06;
+    let c = bands([[150, 120, 100], [226, 205, 170], [168, 112, 72], [233, 220, 196], [201, 160, 120], [176, 98, 60], [236, 224, 200],
+                   [190, 130, 88], [228, 208, 176], [160, 108, 74], [215, 190, 150], [150, 118, 96]], t);
+    const streak = 0.88 + 0.24 * n(3, 26, 4); c = [c[0] * streak, c[1] * streak, c[2] * streak];
+    const du = wrapDist(u - 0.3) / 0.065, dv = (v - 0.63) / 0.045, e = du * du + dv * dv;      // the red spot
+    return e < 1 ? mix3(c, [186, 74, 46], (1 - e) * 1.6) : c;
+  },
+  saturn(u, v, n) {
+    const t = v + (n(2, 4, 3) - 0.5) * 0.03;
+    const c = bands([[170, 150, 110], [222, 200, 150], [201, 176, 125], [236, 219, 176], [205, 180, 130], [228, 208, 160], [190, 165, 115], [215, 195, 150], [165, 145, 108]], t);
+    const s = 0.93 + 0.14 * n(2, 30, 3); return [c[0] * s, c[1] * s, c[2] * s];
+  },
+  neptune(u, v, n) {
+    let c = mix3([34, 70, 190], [80, 135, 240], 0.5 + 0.3 * Math.sin(v * 19) + (n(2, 6, 4) - 0.5) * 0.9);
+    const du = wrapDist(u - 0.62) / 0.07, dv = (v - 0.6) / 0.05, e = du * du + dv * dv;        // dark storm
+    if (e < 1) c = mix3(c, [20, 38, 120], (1 - e) * 1.5);
+    return mix3(c, [225, 238, 255], (n(3, 40, 3) - 0.66) * 6 * Math.max(0, 1 - Math.abs(v - 0.4) * 9));   // bright cloud streaks
+  },
+  venus(u, v, n) {
+    const swirl = n(1.6 + 0, 3.2, 5), k = n(2.2 + swirl * 2, 5 + swirl * 3, 4);
+    return mix3([188, 150, 92], [246, 232, 196], k * 1.5 - 0.25);
+  },
+};
+function paintPlanet(type, seed) {
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 128;
+  const g = cv.getContext('2d'), img = g.createImageData(256, 128), paint = PLANET_PAINT[type];
+  for (let py = 0, i = 0; py < 128; py++) {
+    const v = (py + 0.5) / 128;
+    for (let px = 0; px < 256; px++, i += 4) {
+      const u = (px + 0.5) / 256, ca = Math.cos(u * TAU), sa = Math.sin(u * TAU);
+      // noise sampled on a cylinder, so the left and right edges of the map meet
+      const n = (fx, fy, oct) => fbm(ca * fx + seed, v * fy + seed * 0.37, sa * fx - seed, oct);
+      const c = paint(u, v, n);
+      img.data[i] = c[0]; img.data[i + 1] = c[1]; img.data[i + 2] = c[2]; img.data[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  return cv;
+}
+Object.keys(PLANET_TYPES).forEach((type, i) => { planetTex[type] = paintPlanet(type, 11.3 + i * 7.1); });
+if (typeof Image !== 'undefined') {
+  const photo = new Image();
+  photo.onload = () => {
+    const cv = planetTex.earth; cv.width = 1024; cv.height = 512;
+    const g = cv.getContext('2d'); g.drawImage(photo, 0, 0, 1024, 512);
+    g.globalCompositeOperation = 'lighter'; g.fillStyle = 'rgb(8,22,48)'; g.fillRect(0, 0, 1024, 512);   // lift the near-black oceans
+    planetTexVersion++;
+  };
+  photo.src = 'assets/earth.jpg';
+}
+
 // ---------- gravity ----------
 function placePlanets() {
   planets = [];
-  const want = level >= 3 ? 3 : 2;
-  for (let tries = 0; tries < 400 && planets.length < want; tries++) {
-    const x = rnd(70, W - 70), y = rnd(70, H - 70);
-    if (Math.hypot(x - CX, y - CY) < 240) continue;                    // clear of the fortress
-    if (Math.hypot(x - CX - SPAWN_R, y - CY) < 150) continue;          // and of the launch point
-    if (planets.some(p => Math.hypot(x - p.x, y - p.y) < 200)) continue;
-    const r = rnd(16, 26);
-    planets.push({ x, y, r, mu: 1.1e6 * (r / 20) * (r / 20), ring: Math.random() < 0.5,
-                   color: PLANET_COLORS[(planets.length + level * 2) % PLANET_COLORS.length] });
+  // Earth is always there; its companions change from sector to sector
+  const types = ['earth', OTHER_PLANETS[(level - 1) % 5], OTHER_PLANETS[(level + 1) % 5]].slice(0, level >= 3 ? 3 : 2);
+  for (const type of types) {
+    const t = PLANET_TYPES[type];
+    for (let tries = 0; tries < 300; tries++) {
+      const x = rnd(70, W - 70), y = rnd(70, H - 70);
+      if (Math.hypot(x - CX, y - CY) < 240) continue;                    // clear of the fortress
+      if (Math.hypot(x - CX - SPAWN_R, y - CY) < 150) continue;          // and of the launch point
+      if (planets.some(p => Math.hypot(x - p.x, y - p.y) < 220)) continue;
+      planets.push({ type, x, y, r: t.r, mu: 1.1e6 * (t.r / 28) * (t.r / 28), color: t.color, rate: t.rate, tilt: t.tilt, ring: !!t.ring });
+      break;
+    }
   }
 }
 let GX = 0, GY = 0;     // result of gravityAt
@@ -201,7 +305,7 @@ function hitBody(o) {
 function fabricSources() {
   const out = [];
   if (core && core.alive) out.push({ x: CX, y: CY, depth: 1, size: 110 });
-  for (const p of planets) out.push({ x: p.x, y: p.y, depth: 0.75 * p.r / 20, size: 60 });
+  for (const p of planets) out.push({ x: p.x, y: p.y, depth: 0.75 * p.r / 28, size: 70 });
   if (hole) out.push({ x: hole.x, y: hole.y, depth: 2.2 * hole.k, size: 48 });
   if (whiteHole) out.push({ x: whiteHole.x, y: whiteHole.y, depth: -1.3 * whiteHole.k, size: 48 });
   return out;

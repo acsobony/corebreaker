@@ -133,24 +133,41 @@ const fabric = [];
 // ---------- planets and holes ----------
 let planetsRef = null;
 const planetViews = [];
-function syncPlanets(fdt) {
+function syncPlanets() {
   if (planetsRef !== planets) {
-    for (const g of planetViews) { scene.remove(g); g.traverse(o => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } }); }
+    for (const g of planetViews) {
+      scene.remove(g); g.userData.tex.dispose();
+      g.traverse(o => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } });
+    }
     planetViews.length = 0; planetsRef = planets;
     for (const p of planets) {
-      const g = new THREE.Group(), c = new THREE.Color(p.color);
-      const ball = new THREE.Mesh(new THREE.SphereGeometry(p.r, 28, 18),
-        new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.12, roughness: 0.85, flatShading: true }));
+      const g = new THREE.Group(), tex = new THREE.CanvasTexture(planetTex[p.type]);
+      tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+      // lit by the sun, with a little of the map as glow so the night side is dim rather than black
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(p.r, 48, 28),
+        new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.28, roughness: 0.9, metalness: 0 }));
       g.add(ball);
-      if (p.ring) {
-        const ring = new THREE.Mesh(new THREE.RingGeometry(p.r * 1.35, p.r * 1.95, 48).rotateX(-Math.PI / 2),
-          new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false }));
-        ring.rotation.z = 0.35; g.add(ring);
+      if (p.type === 'earth') {
+        g.add(new THREE.Mesh(new THREE.SphereGeometry(p.r * 1.09, 32, 20), new THREE.MeshBasicMaterial({ color: 0x4f9dff,
+          transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, side: THREE.BackSide, depthWrite: false })));
       }
-      g.position.set(p.x - CX, LVL, p.y - CY); scene.add(g); planetViews.push(g);
+      if (p.ring) {
+        for (const [r0, r1, color, opacity] of [[1.28, 1.78, 0xdac492, 0.75], [1.86, 2.2, 0xbaa276, 0.5]]) {
+          g.add(new THREE.Mesh(new THREE.RingGeometry(p.r * r0, p.r * r1, 64).rotateX(-Math.PI / 2),
+            new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false })));
+        }
+      }
+      g.rotation.z = p.tilt;      // lean the spin axis
+      g.position.set(p.x - CX, LVL, p.y - CY);
+      g.userData = { p, ball, tex, ver: planetTexVersion };
+      scene.add(g); planetViews.push(g);
     }
   }
-  for (const g of planetViews) g.children[0].rotation.y += fdt * 0.25;
+  for (const g of planetViews) {
+    const d = g.userData;
+    d.ball.rotation.y = time * d.p.rate;
+    if (d.ver !== planetTexVersion) { d.ver = planetTexVersion; d.tex.needsUpdate = true; }
+  }
 }
 const holeView = new THREE.Group(); scene.add(holeView);
 const holeDisc = new THREE.Mesh(new THREE.RingGeometry(HOLE_R + 2, HOLE_R + 24, 56, 1, 0, Math.PI * 1.7).rotateX(-Math.PI / 2),
@@ -307,7 +324,7 @@ window.draw = function () {
   const now = performance.now(), fdt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
   if (state !== 'play') shells.forEach(s => { s.rot += s.speed * fdt; });   // idle spin behind the title
   syncShells();
-  syncPlanets(fdt);
+  syncPlanets();
   const src = fabricSources();
   for (const f of fabric) warpFabric(f, src);
   holeView.visible = !!hole;
