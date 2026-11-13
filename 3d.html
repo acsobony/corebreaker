@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Corebreaker 3D</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#05060d;overflow:hidden}
+  canvas{display:block}
+  #hud{position:fixed;inset:0;pointer-events:none;color:#cfeaff;font:600 20px "Trebuchet MS","Segoe UI",sans-serif;text-shadow:0 0 8px #000}
+  #hud > div{position:absolute}
+  #score{left:20px;top:14px}
+  #best{left:0;right:0;top:16px;text-align:center;font-size:16px;color:#7f93b8}
+  #sector{right:20px;top:14px}
+  #lives{left:20px;top:42px;color:#7fd4ff;letter-spacing:6px}
+  #banner{left:0;right:0;top:16%;text-align:center;font-size:30px;color:#ffe9a8}
+  #title{left:0;right:0;top:9%;text-align:center}
+  #title h1{margin:0;font-size:68px;color:#4fe3d0;text-shadow:0 0 24px #4fe3d0}
+  #title h1 span{color:#ff5fa2;text-shadow:0 0 24px #ff5fa2}
+  #title .over{font-size:26px;color:#ff5fa2;min-height:34px;margin-top:6px}
+  #title .go{font-size:24px;color:#ffe9a8;margin-top:10px;animation:blink 1s steps(2) infinite}
+  #help{left:0;right:0;bottom:6%;text-align:center;line-height:1.5}
+  #help small{display:block;margin-top:10px;font-size:16px;font-weight:400;color:#7f93b8}
+  #alt{position:fixed;right:12px;bottom:10px;color:#7f93b8;font:14px "Trebuchet MS","Segoe UI",sans-serif}
+  #err{left:0;right:0;top:45%;text-align:center;color:#ff5fa2}
+  @keyframes blink{50%{opacity:0}}
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/addons/" } }
+</script>
+</head>
+<body>
+<div id="hud">
+  <div id="score"></div><div id="best"></div><div id="sector"></div><div id="lives"></div>
+  <div id="banner"></div>
+  <div id="title"><h1>COREBREAKER <span>3D</span></h1><div class="over"></div><div class="go">PRESS SPACE TO LAUNCH</div></div>
+  <div id="help">
+    &larr; &rarr; or A D &nbsp; rotate &emsp; &uarr; or W &nbsp; thrust &emsp; SPACE &nbsp; fire<br>
+    C &nbsp; switch camera &emsp; P &nbsp; pause
+    <small>Punch a lane through the spinning shells and hit the core.<br>Strip the whole outer shell and the fortress regrows.</small>
+  </div>
+  <div id="err"></div>
+</div>
+<a id="alt" href="index.html">2D version</a>
+<script src="game.js"></script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+// The simulation in game.js is flat: sim (x, y) maps to world (x - CX, LVL, y - CY),
+// and a sim heading a maps to a rotation of -a about the vertical axis.
+const LVL = 13, PLATE_H = 26;
+const $ = id => document.getElementById(id);
+
+let renderer;
+try { renderer = new THREE.WebGLRenderer({ antialias: true }); }
+catch (e) { $('err').textContent = 'WebGL is not available in this browser. Try the 2D version.'; throw e; }
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05060d);
+scene.fog = new THREE.Fog(0x05060d, 900, 2600);
+const camera = new THREE.PerspectiveCamera(50, 1, 1, 6000);
+scene.add(new THREE.AmbientLight(0x8fa4ff, 0.45));
+const sun = new THREE.DirectionalLight(0xffffff, 1.0); sun.position.set(250, 600, 350); scene.add(sun);
+const coreLight = new THREE.PointLight(0xff5544, 0.5, 0, 0); coreLight.position.set(0, LVL + 30, 0); scene.add(coreLight);
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.55, 0.5, 0.45);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+function resize() {
+  renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+
+// ---------- arena floor and stars ----------
+{
+  const pts = [], hw = W / 2, hh = H / 2, y = -24;
+  for (let x = -hw; x <= hw + 1; x += 60) pts.push(x, y, -hh, x, y, hh);
+  for (let z = -hh; z <= hh + 1; z += 60) pts.push(-hw, y, z, hw, y, z);
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x1c2f66, transparent: true, opacity: 0.7 })));
+  const b = new THREE.BufferGeometry(); b.setAttribute('position', new THREE.Float32BufferAttribute(
+    [-hw, y, -hh, hw, y, -hh, hw, y, -hh, hw, y, hh, hw, y, hh, -hw, y, hh, -hw, y, hh, -hw, y, -hh], 3));
+  scene.add(new THREE.LineSegments(b, new THREE.LineBasicMaterial({ color: 0x4f7dff })));
+  const sp = [];
+  for (let i = 0; i < 900; i++) {
+    const v = new THREE.Vector3().randomDirection().multiplyScalar(rnd(1800, 2600));
+    sp.push(v.x, v.y, v.z);
+  }
+  const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
+  scene.add(new THREE.Points(sg, new THREE.PointsMaterial({ color: 0x9fb4ff, size: 2, sizeAttenuation: false, fog: false })));
+}
+
+// ---------- fortress ----------
+const colorCache = new Map();
+const col = s => { let c = colorCache.get(s); if (!c) colorCache.set(s, c = new THREE.Color(s)); return c; };
+function plateGeom(r, n) {
+  const step = TAU / n, gap = 4 / r, t = 5, sh = new THREE.Shape();
+  sh.absarc(0, 0, r + t, gap, step - gap, false);
+  sh.absarc(0, 0, r - t, step - gap, gap, true);
+  sh.closePath();
+  const g = new THREE.ExtrudeGeometry(sh, { depth: PLATE_H, bevelEnabled: false, curveSegments: 8 });
+  g.rotateX(Math.PI / 2); g.translate(0, LVL + PLATE_H / 2, 0);
+  return g;
+}
+const shellViews = new Map();
+function syncShells() {
+  for (const [s, v] of shellViews) if (!shells.includes(s)) {
+    scene.remove(v.group); v.geom.dispose(); v.meshes.forEach(m => m.material.dispose()); shellViews.delete(s);
+  }
+  shells.forEach((s, i) => {
+    let v = shellViews.get(s);
+    if (!v) {
+      v = { group: new THREE.Group(), meshes: [], geom: null, r: -1 };
+      for (let k = 0; k < s.n; k++) {
+        const m = new THREE.Mesh(undefined, new THREE.MeshStandardMaterial({ metalness: 0.2, roughness: 0.45, transparent: true }));
+        m.rotation.y = -k * TAU / s.n; v.group.add(m); v.meshes.push(m);
+      }
+      scene.add(v.group); shellViews.set(s, v);
+    }
+    if (Math.abs(s.r - v.r) > 0.3) {
+      if (v.geom) v.geom.dispose();
+      v.geom = plateGeom(s.r, s.n); v.r = s.r; v.meshes.forEach(m => { m.geometry = v.geom; });
+    }
+    v.group.rotation.y = -s.rot;
+    const c = col(PAL[i]);
+    v.meshes.forEach((m, k) => {
+      const hp = s.seg[k]; m.visible = hp > 0;
+      m.material.color.copy(c); m.material.emissive.copy(c);
+      m.material.emissiveIntensity = hp === 2 ? 0.3 : 0.05;
+      m.material.opacity = hp === 2 ? 1 : 0.5;
+      m.scale.y = hp === 2 ? 1 : 0.55;
+    });
+  });
+}
+const coreView = new THREE.Group(); coreView.position.y = LVL; scene.add(coreView);
+const coreGem = new THREE.Mesh(new THREE.IcosahedronGeometry(15, 0),
+  new THREE.MeshStandardMaterial({ color: 0xff6b5a, emissive: 0xff3b2e, emissiveIntensity: 0.6, flatShading: true, roughness: 0.3 }));
+const barrel = new THREE.Mesh(new THREE.CylinderGeometry(3, 3.5, 16, 10).rotateZ(Math.PI / 2),
+  new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffc46b, emissiveIntensity: 0.8 }));
+barrel.position.x = 20; coreView.add(coreGem, barrel);
+
+// ---------- ship ----------
+const shipView = new THREE.Group(), shipBody = new THREE.Group(); shipView.add(shipBody); scene.add(shipView);
+{
+  const sh = new THREE.Shape();
+  [[17, 0], [-4, -7], [-12, -13], [-9, -3], [-9, 3], [-12, 13], [-4, 7]].forEach(([x, y], i) => sh[i ? 'lineTo' : 'moveTo'](x, y));
+  sh.closePath();
+  const g = new THREE.ExtrudeGeometry(sh, { depth: 4, bevelEnabled: true, bevelThickness: 1.5, bevelSize: 1.2, bevelSegments: 2 });
+  g.rotateX(Math.PI / 2); g.translate(0, 2, 0);
+  shipBody.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0xcfeaff, emissive: 0x2b6ea8, emissiveIntensity: 0.25, metalness: 0.4, roughness: 0.3 })));
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(3.5, 12, 8), new THREE.MeshStandardMaterial({ color: 0x7fd4ff, emissive: 0x7fd4ff, emissiveIntensity: 0.7 }));
+  canopy.scale.set(1.6, 0.8, 0.9); canopy.position.set(2, 4, 0); shipBody.add(canopy);
+}
+const flame = new THREE.Mesh(new THREE.ConeGeometry(4, 18, 10).rotateZ(Math.PI / 2).translate(-9, 0, 0),
+  new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+flame.position.x = -9; shipBody.add(flame);
+let bank = 0;
+
+// ---------- pooled projectiles and drones ----------
+function pool(make) {
+  const items = [];
+  return n => {
+    while (items.length < n) { const m = make(); scene.add(m); items.push(m); }
+    items.forEach((m, i) => { m.visible = i < n; });
+    return items;
+  };
+}
+const shotGeom = new THREE.BoxGeometry(14, 2.4, 2.4), shotMat = new THREE.MeshBasicMaterial({ color: 0xd8f1ff });
+const shotPool = pool(() => new THREE.Mesh(shotGeom, shotMat));
+const boltGeom = new THREE.SphereGeometry(7, 14, 10), boltMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0 });
+const boltPool = pool(() => new THREE.Mesh(boltGeom, boltMat));
+const droneGeom = new THREE.TetrahedronGeometry(10, 0);
+const dronePool = pool(() => new THREE.Mesh(droneGeom,
+  new THREE.MeshStandardMaterial({ color: 0xb98cff, emissive: 0x8f5cff, emissiveIntensity: 0.5, flatShading: true, transparent: true })));
+
+// ---------- particles ----------
+const MAXP = 3000, pPos = new Float32Array(MAXP * 3), pCol = new Float32Array(MAXP * 3);
+const pGeom = new THREE.BufferGeometry();
+pGeom.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+pGeom.setAttribute('color', new THREE.BufferAttribute(pCol, 3));
+const pMesh = new THREE.Points(pGeom, new THREE.PointsMaterial({ size: 7, vertexColors: true, transparent: true,
+  blending: THREE.AdditiveBlending, depthWrite: false }));
+pMesh.frustumCulled = false; scene.add(pMesh);
+const pExtra = new WeakMap();   // gives each flat sim particle some height
+
+// ---------- camera ----------
+let chase = false, camInit = false, lastShip = null;
+const camPos = new THREE.Vector3(), camLook = new THREE.Vector3(), wantPos = new THREE.Vector3(), wantLook = new THREE.Vector3();
+addEventListener('keydown', e => { if (e.code === 'KeyC' && !e.repeat) chase = !chase; });
+function updateCamera(fdt) {
+  const fit = Math.max(1, 1.55 / camera.aspect);
+  if (state !== 'play' || !ship) {
+    const t = time * 0.15;
+    wantPos.set(Math.cos(t) * 430, 250, Math.sin(t) * 430); wantLook.set(0, 10, 0);
+  } else {
+    const sx = ship.x - CX, sz = ship.y - CY;
+    if (chase) {
+      const dx = Math.cos(ship.a), dz = Math.sin(ship.a);
+      // the arena wraps: carry the camera across with the ship so the view does not swing
+      if (lastShip && ship.alive && Math.hypot(sx - lastShip.x, sz - lastShip.z) > 300) {
+        camPos.x += sx - lastShip.x; camPos.z += sz - lastShip.z; camLook.x += sx - lastShip.x; camLook.z += sz - lastShip.z;
+      }
+      wantPos.set(sx - dx * 200, 110, sz - dz * 200); wantLook.set(sx + dx * 120, 8, sz + dz * 120);
+    } else {
+      wantPos.set(sx * 0.08, 800 * fit, 430 * fit + sz * 0.08); wantLook.set(sx * 0.08, 0, 45 + sz * 0.08);
+    }
+    lastShip = { x: sx, z: sz };
+  }
+  const k = camInit ? 1 - Math.exp(-fdt * (chase && state === 'play' ? 7 : 3)) : 1; camInit = true;
+  camPos.lerp(wantPos, k); camLook.lerp(wantLook, k);
+  camera.position.copy(camPos); camera.lookAt(camLook);
+}
+
+// ---------- HUD ----------
+const hudCache = {};
+function setText(id, s) { if (hudCache[id] !== s) { hudCache[id] = s; $(id).textContent = s; } }
+function show(id, on) { const k = id + ':v'; if (hudCache[k] !== on) { hudCache[k] = on; $(id).style.display = on ? '' : 'none'; } }
+function updateHud() {
+  const playing = state === 'play';
+  setText('score', 'SCORE ' + score); setText('best', 'BEST ' + hi);
+  setText('sector', playing ? 'SECTOR ' + level : '');
+  setText('lives', playing ? '▲'.repeat(Math.max(0, Math.min(8, lives - (ship.alive ? 1 : 0)))) : '');
+  setText('banner', !playing ? '' : paused ? 'PAUSED' : clearTimer > 0 ? 'CORE BREACHED  +' + 1000 * level : '');
+  show('title', !playing); show('help', !playing);
+  if (!playing) {
+    const over = $('title').querySelector('.over'), s = state === 'over' ? 'GAME OVER — ' + score + ' points' : '';
+    if (over.textContent !== s) over.textContent = s;
+  }
+}
+
+// ---------- frame ----------
+let lastT = performance.now();
+window.draw = function () {
+  const now = performance.now(), fdt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+  if (state !== 'play') shells.forEach(s => { s.rot += s.speed * fdt; });   // idle spin behind the title
+  syncShells();
+
+  coreView.visible = core.alive;
+  coreView.rotation.y = -core.ang;
+  coreGem.rotation.x += fdt * 1.3; coreGem.rotation.z += fdt * 0.9;
+  coreGem.scale.setScalar(1 + 0.08 * Math.sin(time * 5) + core.flash * 0.25);
+  coreGem.material.emissiveIntensity = 0.6 + core.flash * 1.5;
+  coreLight.intensity = core.alive ? 0.5 + core.flash * 1.5 : 0;
+
+  const playing = state === 'play' && ship;
+  shipView.visible = !!playing && ship.alive && (ship.inv <= 0 || Math.floor(time * 12) % 2 === 1);
+  if (playing) {
+    shipView.position.set(ship.x - CX, LVL, ship.y - CY); shipView.rotation.y = -ship.a;
+    const wantBank = ship.alive ? ((keys.right ? 1 : 0) - (keys.left ? 1 : 0)) * 0.5 : 0;
+    bank += (wantBank - bank) * Math.min(1, fdt * 8); shipBody.rotation.x = bank;
+    flame.visible = ship.flame > 0.02; flame.scale.set(ship.flame * rnd(0.8, 1.3), 1, 1);
+  }
+
+  shotPool(shots.length).forEach((m, i) => { const b = shots[i]; if (!b) return;
+    m.position.set(b.x - CX, LVL + 2, b.y - CY); m.rotation.y = -Math.atan2(b.vy, b.vx); });
+  boltPool(bolts.length).forEach((m, i) => { const b = bolts[i]; if (!b) return;
+    m.position.set(b.x - CX, LVL + 2, b.y - CY); m.scale.setScalar(1 + 0.2 * Math.sin(time * 40)); });
+  dronePool(drones.length).forEach((m, i) => { const d = drones[i]; if (!d) return;
+    m.position.set(d.x - CX, LVL + 2 + Math.sin(d.spin * 0.5) * 4, d.y - CY); m.rotation.set(d.spin, d.spin * 0.7, 0);
+    m.material.opacity = d.life < 2 ? 0.4 + 0.6 * Math.abs(Math.sin(time * 14)) : 1; });
+
+  const n = Math.min(parts.length, MAXP);
+  for (let i = 0; i < n; i++) {
+    const p = parts[i]; let e = pExtra.get(p);
+    if (!e) pExtra.set(p, e = { y: LVL + 2, vy: rnd(-30, 110) });
+    e.y += e.vy * fdt;
+    const c = col(p.color), a = Math.max(0, p.life / p.max);
+    pPos[i * 3] = p.x - CX; pPos[i * 3 + 1] = e.y; pPos[i * 3 + 2] = p.y - CY;
+    pCol[i * 3] = c.r * a; pCol[i * 3 + 1] = c.g * a; pCol[i * 3 + 2] = c.b * a;
+  }
+  pGeom.setDrawRange(0, n); pGeom.attributes.position.needsUpdate = true; pGeom.attributes.color.needsUpdate = true;
+
+  updateCamera(fdt); updateHud();
+  composer.render();
+};
+
+buildFortress();
+startLoop();
+</script>
+</body>
+</html>
