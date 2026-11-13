@@ -52,6 +52,7 @@ let hi = 0; try { hi = +localStorage.getItem('corebreaker.hi') || 0; } catch (e)
 let shells, core, ship, shots, bolts, drones, parts, droneTimer, clearTimer, respawnTimer, shellSeq;
 const stars = Array.from({ length: 90 }, () => ({ x: rnd(0, W), y: rnd(0, H), s: rnd(0.4, 1.6), p: rnd(0, TAU) }));
 
+const ORBIT_SPEED = 170, GRAV_MAX = 240, SPAWN_R = 290;
 const shellRadius = i => 54 + i * 30;
 function makeShell(i) {
   shellSeq++;
@@ -68,7 +69,8 @@ function buildFortress() {
   shots = []; bolts = []; drones = []; droneTimer = 4; clearTimer = 0;
 }
 function spawnShip() {
-  ship = { x: CX + 360, y: CY, vx: 0, vy: 0, a: Math.PI, alive: true, inv: 2.2, cd: 0, flame: 0 };
+  // start already circling the core, nose pointed at it
+  ship = { x: CX + SPAWN_R, y: CY, vx: 0, vy: -ORBIT_SPEED, a: Math.PI, alive: true, inv: 2.2, cd: 0, flame: 0 };
 }
 function newGame() {
   score = 0; lives = 3; level = 1; parts = [];
@@ -109,7 +111,19 @@ function update(dt) {
   // level clear countdown
   if (clearTimer > 0) {
     clearTimer -= dt;
-    if (clearTimer <= 0) { level++; lives++; buildFortress(); }
+    // The fortress regrows where it stood: shove the ship out of its footprint first,
+    // so nobody can wait at the centre and shoot the new core from inside the shells.
+    const keepOut = shellRadius(2) + 45;
+    const dx = ship.x - CX, dy = ship.y - CY, r = Math.hypot(dx, dy);
+    const nx = r > 0.01 ? dx / r : Math.cos(ship.a), ny = r > 0.01 ? dy / r : Math.sin(ship.a);
+    if (ship.alive && r < keepOut) {
+      const push = 600 + 900 * (1 - r / keepOut);
+      ship.vx += nx * push * dt; ship.vy += ny * push * dt;
+    }
+    if (clearTimer <= 0) {
+      level++; lives++; buildFortress();
+      if (ship.alive && r < keepOut) { ship.x = CX + nx * keepOut; ship.y = CY + ny * keepOut; }
+    }
   }
 
   // ship
@@ -125,7 +139,14 @@ function update(dt) {
                      vx: Math.cos(a) * 140 + ship.vx, vy: Math.sin(a) * 140 + ship.vy, life: 0.3, max: 0.3, color: '#ffb347' });
       }
     }
-    const drag = Math.pow(0.75, dt); ship.vx *= drag; ship.vy *= drag;
+    if (core.alive) {
+      // The core pulls the ship in. The pull falls off as 1/r, so the speed needed to circle
+      // (ORBIT_SPEED) is the same at any distance, and it is capped below thrust so you can always climb out.
+      const gx = CX - ship.x, gy = CY - ship.y, gr = Math.hypot(gx, gy) || 1;
+      const g = Math.min(GRAV_MAX, ORBIT_SPEED * ORBIT_SPEED / gr);
+      ship.vx += gx / gr * g * dt; ship.vy += gy / gr * g * dt;
+    }
+    const drag = Math.pow(0.96, dt); ship.vx *= drag; ship.vy *= drag;
     const sp = Math.hypot(ship.vx, ship.vy), MAX = 400;
     if (sp > MAX) { ship.vx *= MAX / sp; ship.vy *= MAX / sp; }
     ship.x += ship.vx * dt; ship.y += ship.vy * dt; wrap(ship);
@@ -142,9 +163,9 @@ function update(dt) {
         if (Math.abs(r - s.r) < 13 && s.seg[segIndex(s, ang)] > 0) {
           const side = r >= s.r ? 1 : -1, nx = dx / r, ny = dy / r;
           const vr = ship.vx * nx + ship.vy * ny;
-          if (vr * side < 0) { ship.vx -= 1.8 * vr * nx; ship.vy -= 1.8 * vr * ny; }
+          if (vr * side < 0) { ship.vx -= 1.8 * vr * nx; ship.vy -= 1.8 * vr * ny; if (Math.abs(vr) > 40) sfx.hit(); }
           ship.x = CX + nx * (s.r + side * 13); ship.y = CY + ny * (s.r + side * 13);
-          sfx.hit(); break;
+          break;
         }
       }
       if (r < 26) killShip();
