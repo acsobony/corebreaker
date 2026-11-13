@@ -42,7 +42,7 @@
     <span class="kb">&larr; &rarr; or A D &nbsp; rotate &emsp; &uarr; or W &nbsp; thrust &emsp; SPACE &nbsp; fire<br>
     C &nbsp; switch camera &emsp; P &nbsp; pause</span>
     <span class="tc">&#9664; &#9654; rotate &emsp; THRUST &emsp; FIRE &emsp; CAM switches view</span>
-    <small>Punch a lane through the spinning shells and hit the core.<br>Strip the whole outer shell and the fortress regrows.<br>The core's gravity pulls you in: coast sideways to orbit and strafe.<br>Planets bend your shots. A black hole spits you out on the far side.</small>
+    <small>Punch a lane through the spinning shells and hit the core.<br>Strip the whole outer shell and the fortress regrows.<br>The core's gravity pulls you in: coast sideways to orbit and strafe.<br>Planets bend your shots. A black hole spits you out on the far side.<br>Earth is on your side: it fires missiles at the drones.</small>
   </div>
   <div id="err"></div>
 </div>
@@ -261,6 +261,12 @@ const droneGeom = new THREE.TetrahedronGeometry(10, 0);
 const dronePool = pool(() => new THREE.Mesh(droneGeom,
   new THREE.MeshStandardMaterial({ color: 0xb98cff, emissive: 0x8f5cff, emissiveIntensity: 0.5, flatShading: true, transparent: true })));
 
+const missileBody = new THREE.CylinderGeometry(2, 2, 12, 10).rotateZ(Math.PI / 2);
+const missileNose = new THREE.ConeGeometry(2.4, 6, 10).rotateZ(-Math.PI / 2).translate(9, 0, 0);
+const missileBodyMat = new THREE.MeshStandardMaterial({ color: 0xeef4ff, emissive: 0xeef4ff, emissiveIntensity: 0.45 });
+const missileNoseMat = new THREE.MeshStandardMaterial({ color: 0xff4d4d, emissive: 0xff4d4d, emissiveIntensity: 0.8 });
+const missilePool = pool(() => { const g = new THREE.Group(); g.add(new THREE.Mesh(missileBody, missileBodyMat), new THREE.Mesh(missileNose, missileNoseMat)); return g; });
+
 // ---------- particles ----------
 const MAXP = 3000, pPos = new Float32Array(MAXP * 3), pCol = new Float32Array(MAXP * 3);
 const pGeom = new THREE.BufferGeometry();
@@ -364,6 +370,9 @@ window.draw = function () {
   dronePool(drones.length).forEach((m, i) => { const d = drones[i]; if (!d) return;
     m.position.set(d.x - CX, LVL + 2 + Math.sin(d.spin * 0.5) * 4, d.y - CY); m.rotation.set(d.spin, d.spin * 0.7, 0);
     m.material.opacity = d.life < 2 ? 0.4 + 0.6 * Math.abs(Math.sin(time * 14)) : 1; });
+
+  missilePool(missiles.length).forEach((g, i) => { const m = missiles[i]; if (!m) return;
+    g.position.set(m.x - CX, LVL + 2, m.y - CY); g.rotation.y = -Math.atan2(m.vy, m.vx); });
 
   const n = Math.min(parts.length, MAXP);
   for (let i = 0; i < n; i++) {

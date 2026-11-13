@@ -97,6 +97,8 @@ const sfx = {
   fire: () => beep(880, 220, 0.12, 'square', 0.05),
   hit: () => beep(300, 120, 0.08, 'triangle', 0.09),
   holeOpen: () => beep(110, 45, 0.9, 'sine', 0.14),
+  launch: () => beep(180, 950, 0.4, 'sawtooth', 0.06),
+  blast: () => { beep(240, 40, 0.35, 'square', 0.09); beep(120, 30, 0.5, 'sawtooth', 0.07); },
   warpIn: () => beep(700, 35, 1.4, 'sawtooth', 0.09),
   warpOut: () => { beep(50, 1100, 0.6, 'sawtooth', 0.09); beep(200, 1600, 0.4, 'triangle', 0.07); },
   crack: () => beep(520, 60, 0.2, 'sawtooth', 0.07),
@@ -121,6 +123,9 @@ let shells, core, ship, shots, bolts, drones, parts, droneTimer, clearTimer, res
 // (whiteHole) returns it on the far side of the arena while warp runs and timeScale slows the game
 let planets = [], hole = null, whiteHole = null, warp = null, holeTimer = 12, timeScale = 1;
 const HOLE_R = 14, HOLE_MU = 2.2e6, LIGHT_BEND = 3;
+// Earth is on your side: now and then it fires a missile at the drones
+let missiles = [], missileTimer = 5;
+const BLAST_R = 46;
 const stars = Array.from({ length: 90 }, () => ({ x: rnd(0, W), y: rnd(0, H), s: rnd(0.4, 1.6), p: rnd(0, TAU) }));
 
 const ORBIT_SPEED = 170, GRAV_MAX = 240, SPAWN_R = 290;
@@ -138,6 +143,7 @@ function buildFortress() {
   shells[0].r = shellRadius(0);
   core = { ang: 0, cd: 2, alive: true, flash: 0 };
   placePlanets(); hole = null; holeTimer = rnd(8, 14);
+  missiles = []; missileTimer = rnd(3, 6);
   shots = []; bolts = []; drones = []; droneTimer = 4; clearTimer = 0;
 }
 function spawnShip() {
@@ -367,6 +373,60 @@ function updateWarp(rdt) {
   }
 }
 
+// ---------- Earth's missiles ----------
+const nearestDrone = (x, y) => drones.reduce((best, d) =>
+  d.life > 0 && (!best || Math.hypot(d.x - x, d.y - y) < Math.hypot(best.x - x, best.y - y)) ? d : best, null);
+function launchMissile(earth) {
+  const target = nearestDrone(earth.x, earth.y);
+  if (!target) return;
+  const a = Math.atan2(target.y - earth.y, target.x - earth.x);
+  missiles.push({ x: earth.x + Math.cos(a) * (earth.r + 5), y: earth.y + Math.sin(a) * (earth.r + 5),
+                  vx: Math.cos(a) * 110, vy: Math.sin(a) * 110, a0: a, age: 0, from: earth, target });
+  burst(earth.x + Math.cos(a) * earth.r, earth.y + Math.sin(a) * earth.r, '#ffd9a0', 14, 110, 0.6);
+  sfx.launch();
+}
+// the blast takes out every drone in range; it does not hurt the ship
+function explodeMissile(m) {
+  m.dead = true; sfx.blast();
+  burst(m.x, m.y, '#ffd9a0', 26, 230, 0.7); burst(m.x, m.y, '#ff7a2f', 16, 120, 1);
+  for (const d of drones) if (d.life > 0 && Math.hypot(d.x - m.x, d.y - m.y) < BLAST_R) { d.life = 0; burst(d.x, d.y, '#b98cff', 12, 170); }
+}
+function updateMissiles(dt) {
+  const earth = planets.find(p => p.type === 'earth');
+  if (earth && core.alive && drones.length) {
+    missileTimer -= dt;
+    if (missileTimer <= 0) { launchMissile(earth); missileTimer = rnd(4, 9); }
+  }
+  for (const m of missiles) {
+    m.age += dt;
+    if (!m.target || m.target.life <= 0 || !drones.includes(m.target)) m.target = nearestDrone(m.x, m.y);
+    if (m.age < 0.5) { m.vx += Math.cos(m.a0) * 520 * dt; m.vy += Math.sin(m.a0) * 520 * dt; }        // boost off the pad
+    else if (m.target) {
+      // then steer: push the velocity toward "full speed straight at the target", which closes in
+      // instead of circling the way a plain pull toward the target would
+      const a = Math.atan2(m.target.y - m.y, m.target.x - m.x);
+      const ex = Math.cos(a) * 330 - m.vx, ey = Math.sin(a) * 330 - m.vy, e = Math.hypot(ex, ey) || 1, f = Math.min(e / dt, 520);
+      m.vx += ex / e * f * dt; m.vy += ey / e * f * dt;
+    }
+    gravityAt(m.x, m.y, 400);                    // ballistic: planets and the black hole curve its arc
+    m.vx += GX * dt; m.vy += GY * dt;
+    const sp = Math.hypot(m.vx, m.vy) || 1;
+    if (sp > 330) { m.vx *= 330 / sp; m.vy *= 330 / sp; }
+    m.x += m.vx * dt; m.y += m.vy * dt;
+    if (Math.random() < dt * 45) parts.push({ x: m.x, y: m.y, vx: -m.vx * 0.15 + rnd(-12, 12), vy: -m.vy * 0.15 + rnd(-12, 12), life: 0.45, max: 0.45, color: '#ff9d4a' });
+    if (drones.some(d => d.life > 0 && Math.hypot(d.x - m.x, d.y - m.y) < 16)) { explodeMissile(m); continue; }
+    const body = hitBody(m);
+    if (body && !(body === m.from && m.age < 0.7)) { if (body === hole) m.dead = true; else explodeMissile(m); continue; }
+    if (core.alive) {                            // a stray one chips the fortress
+      const r = Math.hypot(m.x - CX, m.y - CY), ang = Math.atan2(m.y - CY, m.x - CX);
+      const s = shells.find(s => Math.abs(r - s.r) < 7 && s.seg[segIndex(s, ang)] > 0);
+      if (s) { s.seg[segIndex(s, ang)]--; explodeMissile(m); continue; }
+    }
+    if (m.age > 7 || m.x < -60 || m.x > W + 60 || m.y < -60 || m.y > H + 60) { m.dead = true; burst(m.x, m.y, '#ff9d4a', 6, 60, 0.4); }
+  }
+  missiles = missiles.filter(m => !m.dead);
+}
+
 const segIndex = (s, ang) => Math.floor(norm(ang - s.rot) / (TAU / s.n)) % s.n;
 const lineClear = ang => shells.every(s => s.seg[segIndex(s, ang)] <= 0);
 
@@ -572,6 +632,7 @@ function update(dt) {
       d.life = 0; burst(d.x, d.y, '#b98cff', 14, 170); killShip();
     }
   }
+  updateMissiles(dt);
   drones = drones.filter(d => d.life > 0);
   shots = shots.filter(b => b.life > 0);
 }

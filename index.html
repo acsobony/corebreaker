@@ -159,6 +159,16 @@ function draw() {
       ctx.restore();
     }
     ctx.globalAlpha = 1;
+    // Earth's missiles
+    for (const m of missiles) {
+      ctx.save(); ctx.translate(m.x, m.y); ctx.rotate(Math.atan2(m.vy, m.vx));
+      glow('#ff7a2f', 12); ctx.fillStyle = '#eef4ff'; ctx.fillRect(-8, -2, 12, 4);
+      ctx.fillStyle = '#ff4d4d';
+      ctx.beginPath(); ctx.moveTo(4, -2.5); ctx.lineTo(10, 0); ctx.lineTo(4, 2.5); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-8, -2); ctx.lineTo(-11, -5); ctx.lineTo(-5, -2); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-8, 2); ctx.lineTo(-11, 5); ctx.lineTo(-5, 2); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
     // shots
     glow('#7fd4ff', 10); ctx.strokeStyle = '#eaf6ff'; ctx.lineWidth = 3;
     for (const b of shots) { ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx * 0.018, b.y - b.vy * 0.018); ctx.stroke(); }
@@ -202,6 +212,7 @@ function draw() {
     text('Strip the whole outer shell and the fortress regrows.', CX, y + 164, 17, '#7f93b8');
     text("The core's gravity pulls you in: coast sideways to orbit and strafe.", CX, y + 188, 17, '#7f93b8');
     text('Planets bend your shots. A black hole spits you out on the far side.', CX, y + 212, 17, '#7f93b8');
+    text('Earth is on your side: it fires missiles at the drones.', CX, y + 236, 17, '#7f93b8');
     if (Math.floor(time * 2) % 2) text(touchOn ? 'TAP TO LAUNCH' : 'PRESS SPACE TO LAUNCH', CX, 330, 24, '#ffe9a8');
   }
 }
